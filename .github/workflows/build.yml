@@ -1,0 +1,71 @@
+name: Build Cepheus Kernel with SukiSU + SUSFS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v3
+        with:
+          repository: crdroidandroid/android_kernel_xiaomi_cepheus
+          ref: 15.0
+
+      - name: Setup build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential bc bison flex libssl-dev \
+            gcc clang lld git wget curl zip unzip \
+            python3 python3-pip ccache
+
+      - name: Clone SukiSU
+        run: |
+          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra sukiSU
+          cd sukiSU
+          git checkout v4.1.0
+
+      - name: Apply SukiSU patch
+        run: |
+          cd $GITHUB_WORKSPACE
+          patch -p1 < sukiSU/patches/sukisu-4.1.0.patch
+
+      - name: Clone SUSFS
+        run: |
+          git clone https://gitlab.com/simonpunk/susfs4ksu susfs
+          cd susfs
+          # biasanya ada folder "patches" atau script integrasi
+          patch -p1 < susfs/patches/susfs-ksu.patch
+
+      - name: Integrate SUSFS module
+        run: |
+          git clone https://github.com/sidex15/susfs4ksu-module susfs-module
+          cp -r susfs-module/* drivers/susfs/
+
+      - name: Build kernel
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC=clang
+          make O=out cepheus_defconfig
+          make O=out -j$(nproc)
+
+      - name: Package with AnyKernel3
+        run: |
+          git clone https://github.com/osm0sis/AnyKernel3.git
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          cd AnyKernel3
+          zip -r9 ../cepheus-kernel-sukisu-susfs.zip *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: cepheus-kernel-sukisu-susfs
+          path: cepheus-kernel-sukisu-susfs.zip
