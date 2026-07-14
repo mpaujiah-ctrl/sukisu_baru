@@ -39,10 +39,11 @@ jobs:
           cd sukiSU
           git checkout v4.1.0
 
-      - name: Apply SukiSU patch
+      - name: Integrate SukiSU
         run: |
-          cd $GITHUB_WORKSPACE
-          patch -p1 < sukiSU/patches/sukisu-4.1.0.patch
+          # setelah clone SukiSU-Ultra
+          cp -r sukiSU/kernel/* ./kernel/
+          cp -r sukiSU/uapi/* ./include/uapi/
 
       - name: Clone SUSFS
         run: |
