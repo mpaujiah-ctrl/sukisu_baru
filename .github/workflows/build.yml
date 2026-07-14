@@ -55,23 +55,52 @@ jobs:
         echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
         echo "CONFIG_SUSFS=y" >> $DEFCONFIG
 
+    - name: Clone AnyKernel3
+      run: git clone --depth=1 https://github.com/osm0sis/AnyKernel3
+    
     - name: Compile Kernel
       run: |
-        cd kernel-source
-        # Atur PATH ke toolchain AOSP Clang & GCC
-        export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
-        
-        export ARCH=arm64
-        export SUBARCH=arm64
-        export CLANG_TRIPLE=aarch64-linux-gnu-
-        export CROSS_COMPILE=aarch64-linux-android-
-        export CROSS_COMPILE_ARM32=arm-linux-androideabi-
-        
-        make O=out cepheus_defconfig
-        make O=out CC=clang -j$(nproc --all)
+        cd kernel
+          export ARCH=arm64
+          export LLVM=1
+          export CC=clang
+          export AR=llvm-ar
+          export LD=ld.lld
+          export NM=llvm-nm
+          export OBJCOPY=llvm-objcopy
+          export OBJDUMP=llvm-objdump
+          export STRIP=llvm-strip
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export USE_CCACHE=1
 
-    - name: Upload Kernel Artifact
+          make O=out ARCH=arm64 cepheus_defconfig
+
+          make ARCH=arm64 \
+               O=out \
+               CC=clang \
+               AR=llvm-ar \
+               LD=ld.lld \
+               NM=llvm-nm \
+               OBJCOPY=llvm-objcopy \
+               OBJDUMP=llvm-objdump \
+               STRIP=llvm-strip \
+               -j$(nproc --all) Image.gz-dtb
+
+          echo "=== Verify output ==="
+          ls out/arch/arm64/boot/Image.gz-dtb
+          ls out/arch/arm64/boot/Image
+
+    - name: Pack AnyKernel3
+      run: |
+        cp kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+        cp kernel/out/arch/arm64/boot/Image kernel-pure.img
+        cd AnyKernel3 && zip -r9 ../TURTLE.zip * -x README
+
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Image.gz-dtb
-        path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
+        name: TURTLE
+        path: |
+          TURTLE.zip
+          kernel/out/arch/arm64/boot/Image.gz-dtb
+          kernel-pure.img
