@@ -19,7 +19,7 @@ jobs:
     - name: Install Build Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y bc build-essential libncurses5-dev libssl-dev xz-utils libelf-dev flex bison gnupg gperf lib32z1-dev lib32ncurses5-dev gcc-multilib g++-multilib proxychains-ng libz-dev libtinfo5 ccache libgmp-dev libmpc-dev libmpfr-dev overlayroot liblz4-tool liblzma-dev cpio python3 python3-pip git-lfs
+        sudo apt-get install -y bc build-essential libncurses-dev libssl-dev xz-utils libelf-dev flex bison gnupg gperf lib32z1-dev lib32ncurses-dev gcc-multilib g++-multilib proxychains-ng libz-dev libtinfo6 ccache libgmp-dev libmpc-dev libmpfr-dev overlayroot liblz4-tool liblzma-dev cpio python3 python3-pip git-lfs
 
     - name: Clone Kernel Source
       run: |
