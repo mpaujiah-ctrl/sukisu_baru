@@ -43,7 +43,7 @@ jobs:
     - name: Inject Defconfig Configurations
       run: |
         cd kernel-source
-        DEFCONFIG="arch/arm64/configs/vendor/cepheus_defconfig"
+        DEFCONFIG="arch/arm64/configs/cepheus_defconfig"
         
         # Hapus konfigurasi KSU/SUSFS lama jika ada agar tidak double
         sed -i '/CONFIG_KSU/d' $DEFCONFIG
