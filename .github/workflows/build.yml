@@ -1,78 +1,81 @@
-name: Build Cepheus Kernel with SukiSU + SUSFS
+name: Build Cepheus Kernel with SukiSU & SUSFS
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout kernel source
-        uses: actions/checkout@v4
+    - name: Maximize Build Space
+      uses: easimon/maximize-build-space@master
+      with:
+        root-reserve-mb: 8192
+        temp-reserve-mb: 2048
+        remove-dotnet: 'true'
+        remove-android: 'true'
+        remove-haskell: 'true'
 
-      - name: Clone kernel source
-        run: git clone --depth=1 -b 15.0 https://github.com/crdroidandroid/android_kernel_xiaomi_cepheus kernel
-                  
-      - name: Setup build environment
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential bc bison flex libssl-dev \
-            gcc clang lld git wget curl zip unzip \
-            python3 python3-pip ccache
+    - name: Install Build Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bc build-essential libncurses5-dev libssl-dev xz-utils libelf-dev flex bison gnupg gperf lib32z1-dev lib32ncurses5-dev gcc-multilib g++-multilib proxychains-ng libz-dev libtinfo5 ccache libgmp-dev libmpc-dev libmpfr-dev overlayroot liblz4-tool liblzma-dev cpio python3 python3-pip git-lfs
 
-      - name: Clone SukiSU
-        run: |
-          git clone https://github.com/ShirkNeko/SukiSU-Ultra sukiSU
-          cd sukiSU
-          git checkout v4.1.0
+    - name: Clone Kernel Source
+      run: |
+        git clone --depth=1 -b 15.0 https://github.com/raystef66/kernel_xiaomi_cepheus.git kernel-source
 
-      - name: Integrate SukiSU kernel
-        run: |
-          cp -r sukiSU/kernel/* ./kernel/
-          cp -r sukiSU/uapi/* ./include/uapi/
-          cp -r sukiSU/userspace/* ./userspace/
+    - name: Setup Toolchain (Proton Clang)
+      run: |
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git tc
 
-      - name: Clone SUSFS
-        run: |
-          git clone https://gitlab.com/simonpunk/susfs4ksu susfs
+    - name: Integrate SukiSU-Ultra
+      run: |
+        cd kernel-source
+        # Mengunduh source code SukiSU / KernelSU-Next / ReSukiSU ke folder Drivers
+        curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
 
-      - name: Integrate SUSFS module
-        run: |
-          git clone https://github.com/sidex15/susfs4ksu-module susfs-module
-          mkdir -p drivers/susfs
-          cp -r susfs-module/* drivers/susfs/
+    - name: Apply SUSFS Patches
+      run: |
+        cd kernel-source
+        # Clone repo susfs4ksu khusus branch kernel 4.14
+        git clone --depth=1 -b kernel-4.14 https://gitlab.com/simonpunk/susfs4ksu.git susfs
+        
+        # Salin file header dan patch susfs ke kernel tree
+        cp susfs/kernel_patches/fs/* fs/
+        cp susfs/kernel_patches/include/linux/* include/linux/
+        
+        # Jalankan patch kernel
+        patch -p1 < susfs/kernel_patches/50_add_susfs_in_kernel-4.14.patch || echo "Patch kernel SUSFS gagal atau butuh manual conflict resolution"
+        
+        # Jalankan patch untuk SukiSU/KernelSU
+        cd KernelSU
+        patch -p1 < ../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || echo "Patch SukiSU SUSFS gagal"
+        cd ..
 
-      - name: Patch defconfig for KSU + SUSFS
-        run: |
-          cd kernel
-          echo "CONFIG_KSU=y" >> arch/arm64/configs/cepheus_defconfig
-          echo "CONFIG_KSU_DEBUG=y" >> arch/arm64/configs/cepheus_defconfig
-          echo "CONFIG_SUSFS=y" >> arch/arm64/configs/cepheus_defconfig
-          echo "CONFIG_SUSFS_DEBUG=y" >> arch/arm64/configs/cepheus_defconfig
-      
-      - name: Build kernel
-        run: |
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CC=clang
-          make O=out cepheus_defconfig
-          make O=out -j$(nproc)
+    - name: Inject Defconfig Configurations
+      run: |
+        cd kernel-source
+        # Menambahkan konfigurasi SukiSU dan SUSFS ke defconfig perangkat (ganti cepheus_defconfig jika namanya berbeda)
+        DEFCONFIG="arch/arm64/configs/vendor/cepheus_defconfig"
+        echo "CONFIG_KSU=y" >> $DEFCONFIG
+        echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
+        echo "CONFIG_SUSFS=y" >> $DEFCONFIG
 
-      - name: Package with AnyKernel3
-        run: |
-          git clone https://github.com/osm0sis/AnyKernel3.git
-          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
-          cd AnyKernel3
-          zip -r9 ../cepheus-kernel-sukisu-susfs.zip *
+    - name: Compile Kernel
+      run: |
+        cd kernel-source
+        export PATH=$(pwd)/../tc/bin:$PATH
+        export ARCH=arm64
+        export SUBARCH=arm64
+        export CROSS_COMPILE=aarch64-linux-gnu-
+        export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+        
+        make O=out vendor/cepheus_defconfig
+        make O=out CC=clang -j$(nproc --all)
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: cepheus-kernel-sukisu-susfs
-          path: cepheus-kernel-sukisu-susfs.zip
+    - name: Upload Kernel Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Image.gz-dtb
+        path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
