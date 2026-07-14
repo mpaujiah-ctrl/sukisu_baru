@@ -13,10 +13,10 @@ jobs:
     steps:
       - name: Checkout kernel source
         uses: actions/checkout@v4
-        with:
-          repository: crdroidandroid/android_kernel_xiaomi_cepheus
-          ref: 15.0
 
+      - name: Clone kernel source (raystef66, branch 15.0)
+        run: git clone --depth=1 -b 15.0 https://github.com/crdroidandroid/android_kernel_xiaomi_cepheus kernel
+          
       - name: Patch defconfig for KSU + SUSFS
         run: |
           echo "CONFIG_KSU=y" >> arch/arm64/configs/cepheus_defconfig
