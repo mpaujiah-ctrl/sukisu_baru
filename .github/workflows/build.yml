@@ -69,4 +69,3 @@ jobs:
         with:
           name: cepheus-kernel-sukisu-susfs
           path: cepheus-kernel-sukisu-susfs.zip
-
