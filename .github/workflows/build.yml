@@ -17,7 +17,7 @@ env:
   # Swap for whatever clang TURTLE's existing KSUN build.yml pins —
   # keeping the same toolchain removes one variable while debugging
   # a brand new root-manager integration.
-  CLANG_VERSION: "r547379"
+  CLANG_VERSION: "14" # confirmed valid: Clang-14-link.txt exists on ZyCromerZ/Clang
   SUSFS_BRANCH: "gki-android15-6.6" # placeholder — see SUSFS step below
   KSU_VERSION_FALLBACK: 33129
 
@@ -55,10 +55,26 @@ jobs:
       - name: Fetch prebuilt Clang toolchain
         run: |
           mkdir -p toolchain/clang
-          # TODO: point this at the exact same mirror/tag your KSUN
-          # build.yml already uses instead of this placeholder URL.
-          curl -LSs "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-${CLANG_VERSION}-lastbuild.zip" -o clang.zip
-          unzip -q clang.zip -d toolchain/clang
+          # ZyCromerZ/Clang doesn't publish a stable "lastbuild.zip" URL —
+          # releases are .tar.gz, and the real download link lives inside
+          # a small "-link.txt" file per major version. Fetch that first,
+          # then pull whatever URL it contains.
+          # TODO: confirm CLANG_VERSION matches a real "Clang-<N>-link.txt"
+          # on https://github.com/ZyCromerZ/Clang/tree/main — or better,
+          # swap this whole step for whatever your KSUN build.yml already
+          # uses, since that's a known-working toolchain for this kernel.
+          LINK_TXT="https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-${CLANG_VERSION}-link.txt"
+          CLANG_URL="$(curl -LSs "$LINK_TXT" | head -n1 | tr -d '\r')"
+          if [ -z "$CLANG_URL" ]; then
+            echo "::error::Could not resolve a Clang download URL from ${LINK_TXT} — check CLANG_VERSION"
+            exit 1
+          fi
+          echo "[+] Downloading $CLANG_URL"
+          curl -LSs "$CLANG_URL" -o clang.tar.gz
+          file clang.tar.gz | grep -qi gzip || {
+            echo "::error::Downloaded file is not a valid gzip archive, got:"; file clang.tar.gz; exit 1;
+          }
+          tar -xzf clang.tar.gz -C toolchain/clang
           echo "$GITHUB_WORKSPACE/toolchain/clang/bin" >> "$GITHUB_PATH"
 
       - name: Integrate ReSukiSU (setup.sh)
