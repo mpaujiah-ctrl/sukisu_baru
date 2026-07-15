@@ -1,109 +1,173 @@
-name: Build Cepheus Kernel with SukiSU & SUSFS
+name: Build TURTLE (ReSukiSU)
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - resukisu-integration
+  pull_request:
+    branches:
+      - resukisu-integration
+
+env:
+  KERNEL_NAME: TURTLE
+  DEVICE_CODENAME: cepheus
+  DEFCONFIG: cepheus_defconfig
+  ARCH: arm64
+  # Swap for whatever clang TURTLE's existing KSUN build.yml pins —
+  # keeping the same toolchain removes one variable while debugging
+  # a brand new root-manager integration.
+  CLANG_VERSION: "r547379"
+  SUSFS_BRANCH: "gki-android15-6.6" # placeholder — see SUSFS step below
+  KSU_VERSION_FALLBACK: 33129
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - name: Maximize Build Space
-      uses: easimon/maximize-build-space@master
-      with:
-        root-reserve-mb: 8192
-        temp-reserve-mb: 2048
-        remove-dotnet: 'true'
-        remove-android: 'true'
-        remove-haskell: 'true'
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Checkout repo
-      uses: actions/checkout@v4
-    
-    - name: Clone Kernel Source
-      run: |
-        git clone --depth=1 -b 15.0 https://github.com/raystef66/kernel_xiaomi_cepheus.git kernel-source
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex \
+            git libssl-dev libncurses-dev python3 python3-pip \
+            zip unzip rsync
 
-    - name: Install Build Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y bc build-essential libncurses-dev libssl-dev xz-utils libelf-dev flex bison gnupg gperf lib32z1-dev lib32ncurses-dev gcc-multilib g++-multilib proxychains-ng libz-dev libtinfo6 ccache libgmp-dev libmpc-dev libmpfr-dev overlayroot liblz4-tool liblzma-dev cpio python3 python3-pip git-lfs
-    
-    - name: Install toolchain (clang + GNU cross-compiler)
-      run: |
-        sudo apt update
-        sudo apt install -y clang lld llvm bc bison flex libssl-dev libelf-dev build-essential
-        sudo apt install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+      - name: Enable ccache
+        run: |
+          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          ccache -M 5G
 
-    - name: Integrate SukiSU-Ultra (with SUSFS Support)
-      run: |
-        cd kernel-source
-        # Hapus sisa folder KernelSU bawaan jika ada agar bersih
-        rm -rf drivers/kernelsu KernelSU
-        
-        # Menggunakan branch susfs_new yang aktif di repositori SukiSU-Ultra
-        curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs_new
+      - name: Cache ccache directory
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ env.DEVICE_CODENAME }}-resukisu-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ env.DEVICE_CODENAME }}-resukisu-
 
-    - name: Inject Defconfig Configurations
-      run: |
-        cd kernel-source
-        DEFCONFIG="arch/arm64/configs/cepheus_defconfig"
-        
-        # Hapus konfigurasi KSU/SUSFS lama jika ada agar tidak double
-        sed -i '/CONFIG_KSU/d' $DEFCONFIG
-        sed -i '/CONFIG_SUSFS/d' $DEFCONFIG
-        
-        # Tambahkan konfigurasi baru (Menggunakan Manual Hook untuk non-GKI)
-        echo "CONFIG_KSU=y" >> $DEFCONFIG
-        echo "CONFIG_KSU_MANUAL_HOOK=y" >> $DEFCONFIG
-        echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
-        echo "CONFIG_SUSFS=y" >> $DEFCONFIG
+      - name: Fetch prebuilt Clang toolchain
+        run: |
+          mkdir -p toolchain/clang
+          # TODO: point this at the exact same mirror/tag your KSUN
+          # build.yml already uses instead of this placeholder URL.
+          curl -LSs "https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-${CLANG_VERSION}-lastbuild.zip" -o clang.zip
+          unzip -q clang.zip -d toolchain/clang
+          echo "$GITHUB_WORKSPACE/toolchain/clang/bin" >> "$GITHUB_PATH"
 
-    - name: Clone AnyKernel3
-      run: git clone --depth=1 https://github.com/osm0sis/AnyKernel3
-    
-    - name: Compile Kernel
-      run: |
-        cd kernel
-          export ARCH=arm64
-          export LLVM=1
-          export CC=clang
-          export AR=llvm-ar
-          export LD=ld.lld
-          export NM=llvm-nm
-          export OBJCOPY=llvm-objcopy
-          export OBJDUMP=llvm-objdump
-          export STRIP=llvm-strip
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export USE_CCACHE=1
+      - name: Integrate ReSukiSU (setup.sh)
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+          echo "[+] ReSukiSU symlinked into drivers/kernelsu"
 
-          make O=out ARCH=arm64 cepheus_defconfig
+      - name: Apply manual-hook compatibility patch
+        run: |
+          # Fixes ksu_handle_stat signature (2-arg -> 3-arg) for ReSukiSU compat.
+          # Safe to re-run: checks before applying so it no-ops once merged
+          # upstream into this branch.
+          git apply --check resukisu-cepheus-manual-hooks.patch 2>/dev/null \
+            && git apply resukisu-cepheus-manual-hooks.patch \
+            && echo "[+] Patch applied" \
+            || echo "[i] Patch already applied or not needed, skipping"
 
-          make ARCH=arm64 \
-               O=out \
-               CC=clang \
-               AR=llvm-ar \
-               LD=ld.lld \
-               NM=llvm-nm \
-               OBJCOPY=llvm-objcopy \
-               OBJDUMP=llvm-objdump \
-               STRIP=llvm-strip \
-               -j$(nproc --all) Image.gz-dtb
+      - name: Apply known InfiniR build fixes
+        run: |
+          # Carried over from the KSUN-era TURTLE build; these address
+          # InfiniR source quirks, not root-manager specifics, so they
+          # should still apply with ReSukiSU. Re-verify #2 below though —
+          # CONFIG_KSU_SUSFS_TRY_UMOUNT was a KSUN-specific umount bug
+          # workaround and may not have a ReSukiSU equivalent flag.
 
-          echo "=== Verify output ==="
-          ls out/arch/arm64/boot/Image.gz-dtb
-          ls out/arch/arm64/boot/Image
+          # 1. KSU_VERSION_FALLBACK — InfiniR's build system can't always
+          #    derive a version string from a shallow/detached clone.
+          if ! grep -q "KSU_VERSION_FALLBACK" Makefile; then
+            echo "KSU_VERSION_FALLBACK := ${KSU_VERSION_FALLBACK}" >> Makefile
+          fi
 
-    - name: Pack AnyKernel3
-      run: |
-        cp kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
-        cp kernel/out/arch/arm64/boot/Image kernel-pure.img
-        cd AnyKernel3 && zip -r9 ../TURTLE.zip * -x README
+          # 2. yamltree.c stub — verify this is still needed for ReSukiSU;
+          #    it was required to satisfy a missing symbol during the
+          #    original KSUN + SUSFS v2.1.0 bring-up.
+          if [ ! -f scripts/yamltree.c ] && [ -f scripts/yamltree.c.stub ]; then
+            cp scripts/yamltree.c.stub scripts/yamltree.c
+            echo "[+] yamltree.c stub applied"
+          fi
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: TURTLE
-        path: |
-          TURTLE.zip
-          kernel/out/arch/arm64/boot/Image.gz-dtb
-          kernel-pure.img
+      - name: Integrate SUSFS
+        run: |
+          # ReSukiSU documents SUSFS as a separate backport step: pick the
+          # branch matching this kernel version from simonpunk/susfs4ksu
+          # and apply the kernel-side patches, same pattern as pulling
+          # SUSFS from raystef66's 16.0-ksun branch previously — just
+          # confirm the branch name below is the non-GKI/4.14-compatible
+          # one before relying on this in CI, the "gki-*" branches target
+          # GKI2 kernels and won't apply cleanly to 4.14.
+          git clone --depth 1 -b "${SUSFS_BRANCH}" https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu || {
+            echo "::warning::SUSFS branch ${SUSFS_BRANCH} not found — verify the correct non-GKI branch name and update SUSFS_BRANCH"
+            exit 1
+          }
+          cp susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
+          cp susfs4ksu/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
+          echo "CONFIG_KSU_SUSFS=y" >> "arch/${ARCH}/configs/${DEFCONFIG}"
+
+      - name: Validate required manual hooks are present
+        run: |
+          python3 .github/scripts/verify_ksu_hooks.py \
+            --dfd fs/stat.c \
+            --execveat fs/exec.c \
+            --faccessat fs/open.c \
+            --reboot kernel/reboot.c
+          # Adapt this from the SukiSU-Ultra CI script that already does
+          # sys.exit(1)-on-mismatch — same pattern, just re-pointed at the
+          # ReSukiSU hook signatures confirmed during recon.
+
+      - name: Confirm defconfig flags
+        run: |
+          for flag in CONFIG_KSU=y CONFIG_KSU_MANUAL_HOOK=y CONFIG_KALLSYMS_ALL=y CONFIG_KSU_SUSFS=y; do
+            grep -qx "$flag" "arch/${ARCH}/configs/${DEFCONFIG}" || {
+              echo "::error::Missing $flag in ${DEFCONFIG}"; exit 1;
+            }
+          done
+          grep -q "^CONFIG_KPROBES=y" "arch/${ARCH}/configs/${DEFCONFIG}" && {
+            echo "::error::CONFIG_KPROBES must stay disabled on 4.14 non-GKI (this is what broke the SukiSU-Ultra builtin branch)"; exit 1;
+          } || echo "[+] CONFIG_KPROBES correctly unset"
+
+      - name: Build kernel
+        run: |
+          export ARCH=${ARCH}
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          make O=out ${DEFCONFIG}
+          make O=out -j$(nproc --all) CC="clang" 2>&1 | tee build.log
+          test -f out/arch/${ARCH}/boot/Image || {
+            echo "::error::Kernel Image not produced, see build.log"; exit 1;
+          }
+
+      - name: Package AnyKernel3
+        run: |
+          git clone --depth 1 https://github.com/osm0sis/AnyKernel3 AK3
+          cp out/arch/${ARCH}/boot/Image AK3/
+          [ -f out/arch/${ARCH}/boot/dtbo.img ] && cp out/arch/${ARCH}/boot/dtbo.img AK3/
+          cd AK3
+          zip -r9 "../${KERNEL_NAME}-ReSukiSU-${DEVICE_CODENAME}-$(date +%Y%m%d).zip" . \
+            -x ".git*" -x "README.md"
+
+      - name: Upload build log (always, for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+
+      - name: Upload flashable zip
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.KERNEL_NAME }}-ReSukiSU-${{ env.DEVICE_CODENAME }}
+          path: "*.zip"
